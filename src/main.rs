@@ -1,14 +1,11 @@
-use serde::{Deserialize, Serialize};
+mod data_access;
+mod models;
+
+use crate::models::TodoItem;
+use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use warp::body::json as body_json;
 use warp::Filter;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TodoItem {
-    id: u64,         // 一意の識別子
-    title: String,   // ToDo項目のタイトル
-    completed: bool, // 完了したかどうか
-}
 
 #[derive(Debug, Deserialize)]
 struct UpdateTodoItem {
@@ -26,12 +23,23 @@ async fn list_todos_handler(state: AppState) -> Result<impl warp::Reply, warp::R
     Ok(warp::reply::json(&*todos))
 }
 
+// カスタムエラータイプ
+#[derive(Debug)]
+struct IOError {
+    inner: std::io::Error,
+}
+
+impl warp::reject::Reject for IOError {}
+
 async fn add_todo_handler(
     todo: TodoItem,
     state: AppState,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let mut todos = state.todos.lock().unwrap();
     todos.push(todo);
+    // データをファイルに保存
+    data_access::save(&todos, "data/todo.json")
+        .map_err(|e| warp::reject::custom(IOError { inner: e }))?;
     Ok(warp::reply::json(&*todos))
 }
 
@@ -84,7 +92,10 @@ fn with_state(
 
 #[tokio::main]
 async fn main() {
-    let todos = Arc::new(Mutex::new(Vec::new()));
+    let todos = match data_access::load("todo.json") {
+        Ok(todos) => Arc::new(Mutex::new(todos)),
+        Err(_) => Arc::new(Mutex::new(Vec::new())),
+    };
     let app_state = AppState {
         todos: todos.clone(),
     };
